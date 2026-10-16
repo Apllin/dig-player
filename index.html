@@ -13,10 +13,9 @@
   server, so this page is static: no backend, nothing stored, nothing logged.
 
   YouTube and SoundCloud report when a track ends, so the queue advances by
-  itself. A Bandcamp find that the bot located on YouTube or SoundCloud plays
-  there and is marked "BC →", with a link back to the record. A row with only
-  a Bandcamp link opens Bandcamp instead: its player
-  needs an album id the bot does not have, and reports nothing.
+  itself. A Bandcamp release plays whole in Bandcamp's own embedded player,
+  track list included; that player reports nothing, so ⏭ moves on from it.
+  A Bandcamp link with no release id is opened in the browser instead.
 
   Browsers do not let a page start sound on its own, so the first track
   starts on a tap; the rest follow.
@@ -38,6 +37,7 @@
   #stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000;
            border-radius: 10px; overflow: hidden; }
   #stage.sc { aspect-ratio: auto; height: 166px; }
+  #stage.bc { aspect-ratio: auto; height: 472px; background: transparent; }
   #stage > div, #stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
   #start { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
            background: rgba(0,0,0,.55); color: #fff; font-size: 18px; border: 0; cursor: pointer; z-index: 2; }
@@ -99,10 +99,14 @@ async function decode(fragment) {
   return rows.map(([p, id, artist, title, bc]) => ({ p, id, artist, title, bc }));
 }
 
+// A Bandcamp row with a numeric id is a whole release Bandcamp's own player
+// can play; one with a URL instead can only be opened in the browser.
+function embeddable(track) { return track.p !== "b" || /^\d+$/.test(track.id); }
+
 function url(track) {
   if (track.p === "y") return "https://www.youtube.com/watch?v=" + track.id;
   if (track.p === "s") return "https://soundcloud.com/" + track.id;
-  return track.id;
+  return track.bc || track.id;
 }
 
 function render() {
@@ -115,7 +119,8 @@ function render() {
     const t = document.createElement("span"); t.className = "t";
     t.textContent = `${track.artist} — ${track.title}`;
     const p = document.createElement("span"); p.className = "p";
-    p.textContent = track.bc ? `BC → ${LABEL[track.p]}` : LABEL[track.p];
+    p.textContent = track.p === "b" && embeddable(track) ? "Bandcamp · релиз"
+      : track.bc ? `BC → ${LABEL[track.p]}` : LABEL[track.p];
     li.append(n, t, p);
     li.onclick = () => { started = true; play(index); };
     list.append(li);
@@ -129,7 +134,9 @@ function render() {
     const w = document.createElement("div"); w.className = "where";
     w.textContent = `${current + 1} из ${tracks.length} · ${LABEL[track.p]}`;
     now.append(a, t, w);
-    if (track.bc) {
+    if (track.p === "b") {
+      w.textContent += " · релиз целиком; к следующему — ⏭";
+    } else if (track.bc) {
       // Found on YouTube or SoundCloud, but it came from Bandcamp: say so,
       // and keep the way back to the record.
       const bc = document.createElement("a");
@@ -171,10 +178,17 @@ function youtube() {
 }
 
 function clearSoundcloud() {
-  const old = document.getElementById("sc");
-  if (old) old.remove();
+  for (const id of ["sc", "bc"]) {
+    const old = document.getElementById(id);
+    if (old) old.remove();
+  }
   scWidget = null;
-  document.getElementById("stage").classList.remove("sc");
+  document.getElementById("stage").classList.remove("sc", "bc");
+}
+
+function hex(cssVar, fallback) {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(cssVar).trim();
+  return /^#[0-9a-f]{6}$/i.test(value) ? value.slice(1) : fallback;
 }
 
 async function play(index) {
@@ -204,17 +218,33 @@ async function play(index) {
     if (!window.SC) await loadScript("https://w.soundcloud.com/player/api.js");
     scWidget = SC.Widget(frame);
     scWidget.bind(SC.Widget.Events.FINISH, () => next());
+  } else if (embeddable(track)) {
+    // The whole release in Bandcamp's own player, track list included. It
+    // reports nothing back, so the queue waits for ⏭ here.
+    if (ytPlayer) { ytPlayer.stopVideo(); }
+    document.getElementById("yt").style.visibility = "hidden";
+    clearSoundcloud();
+    const stage = document.getElementById("stage");
+    stage.classList.add("bc");
+    const frame = document.createElement("iframe");
+    frame.id = "bc";
+    frame.allow = "autoplay";
+    frame.src = "https://bandcamp.com/EmbeddedPlayer/album=" + track.id +
+      "/size=large/bgcol=" + hex("--bg", "ffffff") + "/linkcol=" + hex("--accent", "0687f5") +
+      "/tracklist=true/transparent=true/";
+    stage.append(frame);
   } else {
-    // Bandcamp only: open it in the browser and move on in the queue.
+    // Bandcamp with no release id: open it in the browser.
     if (tg) tg.openLink(url(track)); else window.open(url(track), "_blank");
   }
 }
 
-// The queue moves past Bandcamp-only rows: opening a browser by itself in the
-// middle of listening would be worse than skipping. Tapping one opens it.
+// The queue moves past Bandcamp rows it cannot embed: opening a browser by
+// itself in the middle of listening would be worse than skipping. Tapping
+// one opens it.
 function step(from, direction) {
   for (let i = from + direction; i >= 0 && i < tracks.length; i += direction) {
-    if (tracks[i].p !== "b") return i;
+    if (embeddable(tracks[i])) return i;
   }
   return -1;
 }
@@ -242,7 +272,7 @@ document.getElementById("start").onclick = () => {
     return;
   }
   if (!tracks.length) { showError("В подборке нет треков, которые можно проиграть."); return; }
-  const first = tracks.findIndex(t => t.p !== "b");
+  const first = tracks.findIndex(embeddable);
   current = first < 0 ? 0 : first;
   render();
   document.getElementById("start").hidden = false;
