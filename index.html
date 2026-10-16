@@ -85,6 +85,69 @@ let tracks = [];          // [{p, id, artist, title}]
 let current = -1;
 let ytPlayer = null, ytReady = null, scWidget = null, started = false;
 
+// --- carrying on where the last player stopped ------------------------------
+//
+// Telegram Desktop hides a Mini App when another chat is opened, keeps its
+// sound playing, and offers no way back to it. Opening "▶ Слушать" again
+// starts a fresh page — so the old one is told to fall silent, and the new one
+// picks up the same track at the same second. Position is kept per list, in
+// this browser's local storage, for a few hours.
+const STATE_KEY = "dig-player:" + [...location.hash].reduce(
+  (h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 7).toString(36);
+const STATE_TTL_MS = 6 * 3600 * 1000;
+let position = 0;            // seconds into the current track
+let resumeAt = 0;            // where to start the first track played, once
+
+function saveState() {
+  try {
+    localStorage.setItem(STATE_KEY, JSON.stringify({ i: current, t: position, at: Date.now() }));
+  } catch (_) { /* storage unavailable: resuming is a convenience */ }
+}
+
+function loadState() {
+  try {
+    const state = JSON.parse(localStorage.getItem(STATE_KEY) || "null");
+    if (state && Date.now() - state.at < STATE_TTL_MS) return state;
+  } catch (_) { /* nothing to resume */ }
+  return null;
+}
+
+function pauseAll() {
+  try { if (ytPlayer) ytPlayer.pauseVideo(); } catch (_) {}
+  try { if (scWidget) scWidget.pause(); } catch (_) {}
+}
+
+// Another copy of this page opened (say, "▶ Слушать" pressed again after the
+// window was hidden): note where this one is, and stop.
+const channel = "BroadcastChannel" in window ? new BroadcastChannel("dig-player") : null;
+const instance = Math.random().toString(36).slice(2);
+if (channel) {
+  channel.onmessage = event => {
+    if (event.data && event.data.hello && event.data.hello !== instance) {
+      saveState();
+      pauseAll();
+    }
+  };
+}
+
+setInterval(() => {
+  if (current < 0 || !started) return;
+  const track = tracks[current];
+  if (track.p === "y" && ytPlayer && ytPlayer.getCurrentTime) {
+    position = ytPlayer.getCurrentTime() || 0;
+    saveState();
+  } else if (track.p === "s" && scWidget) {
+    scWidget.getPosition(ms => { position = (ms || 0) / 1000; saveState(); });
+  } else {
+    saveState();
+  }
+}, 2000);
+
+function clock(seconds) {
+  const s = Math.floor(seconds);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
 function showError(text) {
   const box = document.getElementById("error");
   box.textContent = text;
@@ -199,6 +262,9 @@ function hex(cssVar, fallback) {
 
 async function play(index) {
   if (index < 0 || index >= tracks.length) return;
+  const startAt = index === current ? resumeAt : 0;
+  resumeAt = 0;
+  position = startAt;
   current = index;
   render();
   const track = tracks[index];
@@ -208,7 +274,8 @@ async function play(index) {
     clearSoundcloud();
     document.getElementById("yt").style.visibility = "visible";
     const player = await youtube();
-    if (started) player.loadVideoById(track.id); else player.cueVideoById(track.id);
+    const video = { videoId: track.id, startSeconds: startAt };
+    if (started) player.loadVideoById(video); else player.cueVideoById(video);
   } else if (track.p === "s") {
     if (ytPlayer) { ytPlayer.stopVideo(); }
     document.getElementById("yt").style.visibility = "hidden";
@@ -224,6 +291,12 @@ async function play(index) {
     if (!window.SC) await loadScript("https://w.soundcloud.com/player/api.js");
     scWidget = SC.Widget(frame);
     scWidget.bind(SC.Widget.Events.FINISH, () => next());
+    if (startAt > 0) {
+      // The widget can only seek once it is playing.
+      const widget = scWidget;
+      const seek = () => { widget.seekTo(startAt * 1000); widget.unbind(SC.Widget.Events.PLAY); };
+      widget.bind(SC.Widget.Events.PLAY, seek);
+    }
   } else if (embeddable(track)) {
     // The whole release in Bandcamp's own player, track list included. It
     // reports nothing back, so the queue waits for ⏭ here.
@@ -280,9 +353,24 @@ document.getElementById("start").onclick = () => {
   if (!tracks.length) { showError("В подборке нет треков, которые можно проиграть."); return; }
   const first = tracks.findIndex(embeddable);
   current = first < 0 ? 0 : first;
+  if (channel) {
+    channel.postMessage({ hello: instance });
+    // Give an older copy a moment to note its place before reading it.
+    await new Promise(resolve => setTimeout(resolve, 400));
+  }
+  const saved = loadState();
+  if (saved && saved.i >= 0 && saved.i < tracks.length && embeddable(tracks[saved.i])) {
+    current = saved.i;
+    resumeAt = saved.t > 5 ? saved.t : 0;
+    if (resumeAt) {
+      document.getElementById("start").textContent = `▶ Продолжить с ${clock(resumeAt)}`;
+    }
+  }
   render();
   document.getElementById("start").hidden = false;
-  if (tracks[current].p === "y") youtube().then(p => p.cueVideoById(tracks[current].id));
+  if (tracks[current].p === "y") {
+    youtube().then(p => p.cueVideoById({ videoId: tracks[current].id, startSeconds: resumeAt }));
+  }
 })();
 </script>
 </body>
