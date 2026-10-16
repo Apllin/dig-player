@@ -61,6 +61,8 @@
   li .n { color: var(--muted); min-width: 1.6em; text-align: right; }
   li .t { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   li .p { color: var(--muted); font-size: 12px; flex-shrink: 0; }
+  li .star, #star { background: none; border: 0; color: var(--accent); font-size: 18px;
+                    line-height: 1; padding: 0 2px; cursor: pointer; flex-shrink: 0; }
   #error { color: #f87171; margin: 1em 0; }
 </style>
 </head>
@@ -84,6 +86,38 @@ const LABEL = { y: "YouTube", s: "SoundCloud", b: "Bandcamp" };
 let tracks = [];          // [{p, id, artist, title}]
 let current = -1;
 let ytPlayer = null, ytReady = null, scWidget = null, started = false;
+let bot = "";                // the bot's username, for ☆ to send a track back
+
+// --- ☆: saving a track to the bot's saved list -------------------------------
+//
+// An inline Mini App cannot send data to the bot directly. It can open a
+// Telegram link, though, and "t.me/<bot>?start=sv_<token>" arrives in the chat
+// as "/start sv_<token>": the bot saves the track the token names, then
+// deletes both messages. Stars already pressed are remembered here.
+const SAVED_KEY = "dig-player:saved";
+function savedTokens() {
+  try { return new Set(JSON.parse(localStorage.getItem(SAVED_KEY) || "[]")); }
+  catch (_) { return new Set(); }
+}
+function star(track) {
+  if (!bot || !track.token) return;
+  const link = `https://t.me/${bot}?start=sv_${track.token}`;
+  if (tg && tg.openTelegramLink) tg.openTelegramLink(link); else window.open(link, "_blank");
+  try {
+    const saved = savedTokens(); saved.add(track.token);
+    localStorage.setItem(SAVED_KEY, JSON.stringify([...saved].slice(-500)));
+  } catch (_) {}
+  render();
+}
+function starButton(track) {
+  const button = document.createElement("button");
+  button.className = "star";
+  const done = savedTokens().has(track.token);
+  button.textContent = done ? "★" : "☆";
+  button.title = done ? "Сохранено" : "Сохранить в боте";
+  button.onclick = event => { event.stopPropagation(); if (!done) star(track); };
+  return button;
+}
 
 // --- carrying on where the last player stopped ------------------------------
 //
@@ -160,12 +194,19 @@ function fromBase64url(text) {
 }
 
 async function decode(fragment) {
-  const packed = new URLSearchParams(fragment.replace(/^#/, "")).get("t");
+  const params = new URLSearchParams(fragment.replace(/^#/, ""));
+  bot = params.get("b") || "";
+  const packed = params.get("t");
   if (!packed) return [];
   const stream = new Blob([fromBase64url(packed)]).stream()
     .pipeThrough(new DecompressionStream("deflate-raw"));
   const rows = JSON.parse(await new Response(stream).text());
-  return rows.map(([p, id, artist, title, bc]) => ({ p, id, artist, title, bc }));
+  // [service, id, artist, title, token, bandcamp url]. Links made before the
+  // token existed put the Bandcamp URL fifth; tell them apart by its shape.
+  return rows.map(([p, id, artist, title, fifth, sixth]) =>
+    fifth && fifth.startsWith("http")
+      ? { p, id, artist, title, token: "", bc: fifth }
+      : { p, id, artist, title, token: fifth || "", bc: sixth });
 }
 
 // A Bandcamp row with a numeric id is a whole release Bandcamp's own player
@@ -191,6 +232,7 @@ function render() {
     p.textContent = track.p === "b" && embeddable(track) ? "Bandcamp · релиз"
       : track.bc ? `BC → ${LABEL[track.p]}` : LABEL[track.p];
     li.append(n, t, p);
+    if (bot && track.token) li.append(starButton(track));
     li.onclick = () => { started = true; play(index); };
     list.append(li);
   });
@@ -203,6 +245,11 @@ function render() {
     const w = document.createElement("div"); w.className = "where";
     w.textContent = `${current + 1} из ${tracks.length} · ${LABEL[track.p]}`;
     now.append(a, t, w);
+    if (bot && track.token) {
+      const saveNow = starButton(track);
+      saveNow.id = "star";
+      a.append(" ", saveNow);
+    }
     if (track.p === "b") {
       w.textContent += " · релиз целиком; к следующему — ⏭";
     } else if (track.bc) {
