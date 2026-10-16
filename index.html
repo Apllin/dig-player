@@ -227,7 +227,8 @@ async function decode(fragment) {
 
 // A Bandcamp row with a numeric id is a whole release Bandcamp's own player
 // can play; one with a URL instead can only be opened in the browser.
-function embeddable(track) { return track.p !== "b" || /^\d+$/.test(track.id); }
+// A Bandcamp id is a release ("123") or a single track ("t123").
+function embeddable(track) { return track.p !== "b" || /^t?\d+$/.test(track.id); }
 
 function url(track) {
   if (track.p === "y") return "https://www.youtube.com/watch?v=" + track.id;
@@ -245,7 +246,7 @@ function render() {
     const t = document.createElement("span"); t.className = "t";
     t.textContent = `${track.artist} — ${track.title}`;
     const p = document.createElement("span"); p.className = "p";
-    p.textContent = track.p === "b" && embeddable(track) ? "Bandcamp · релиз" : LABEL[track.p];
+    p.textContent = track.p === "b" && embeddable(track) ? (track.id.startsWith("t") ? "Bandcamp" : "Bandcamp · релиз") : LABEL[track.p];
     li.append(n, t, p);
     if (track.bc) li.append(bandcampButton(track));
     if (bot && track.token) li.append(starButton(track));
@@ -370,9 +371,11 @@ async function play(index) {
     const frame = document.createElement("iframe");
     frame.id = "bc";
     frame.allow = "autoplay";
-    frame.src = "https://bandcamp.com/EmbeddedPlayer/album=" + track.id +
+    const single = track.id.startsWith("t");
+    frame.src = "https://bandcamp.com/EmbeddedPlayer/" +
+      (single ? "track=" + track.id.slice(1) : "album=" + track.id) +
       "/size=large/bgcol=" + hex("--bg", "ffffff") + "/linkcol=" + hex("--accent", "0687f5") +
-      "/tracklist=true/transparent=true/";
+      "/tracklist=" + (single ? "false" : "true") + "/transparent=true/";
     stage.append(frame);
   } else {
     // Bandcamp with no release id: open it in the browser.
