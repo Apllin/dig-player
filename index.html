@@ -61,6 +61,10 @@
   li .n { color: var(--muted); min-width: 1.6em; text-align: right; }
   li .t { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   li .p { color: var(--muted); font-size: 12px; flex-shrink: 0; }
+  button.bc { background: none; border: 1px solid var(--accent); color: var(--accent);
+              border-radius: 6px; font-size: 12px; padding: 2px 6px; cursor: pointer;
+              flex-shrink: 0; }
+  #now button.bc { margin-top: 6px; font-size: 14px; padding: 4px 10px; }
   li .star, #star { background: none; border: 0; color: var(--accent); font-size: 18px;
                     line-height: 1; padding: 0 2px; cursor: pointer; flex-shrink: 0; }
   #error { color: #f87171; margin: 1em 0; }
@@ -109,6 +113,18 @@ function star(track) {
   } catch (_) {}
   render();
 }
+function bandcampButton(track) {
+  const button = document.createElement("button");
+  button.className = "bc";
+  button.textContent = "BC ↗";
+  button.title = "Открыть на Bandcamp";
+  button.onclick = event => {
+    event.stopPropagation();
+    if (tg) tg.openLink(track.bc); else window.open(track.bc, "_blank");
+  };
+  return button;
+}
+
 function starButton(track) {
   const button = document.createElement("button");
   button.className = "star";
@@ -229,9 +245,9 @@ function render() {
     const t = document.createElement("span"); t.className = "t";
     t.textContent = `${track.artist} — ${track.title}`;
     const p = document.createElement("span"); p.className = "p";
-    p.textContent = track.p === "b" && embeddable(track) ? "Bandcamp · релиз"
-      : track.bc ? `BC → ${LABEL[track.p]}` : LABEL[track.p];
+    p.textContent = track.p === "b" && embeddable(track) ? "Bandcamp · релиз" : LABEL[track.p];
     li.append(n, t, p);
+    if (track.bc) li.append(bandcampButton(track));
     if (bot && track.token) li.append(starButton(track));
     li.onclick = () => { started = true; play(index); };
     list.append(li);
@@ -252,13 +268,12 @@ function render() {
     }
     if (track.p === "b") {
       w.textContent += " · релиз целиком; к следующему — ⏭";
-    } else if (track.bc) {
-      // Found on YouTube or SoundCloud, but it came from Bandcamp: say so,
-      // and keep the way back to the record.
-      const bc = document.createElement("a");
-      bc.className = "where"; bc.href = track.bc; bc.textContent = "с Bandcamp ↗";
-      bc.onclick = e => { e.preventDefault(); if (tg) tg.openLink(track.bc); else window.open(track.bc, "_blank"); };
-      w.append(" · ", bc);
+    }
+    if (track.bc) {
+      // The record's Bandcamp page: to follow the artist or label there.
+      const bc = bandcampButton(track);
+      bc.textContent = "Bandcamp ↗";
+      now.append(bc);
     }
   }
   document.getElementById("prev").disabled = step(current, -1) < 0;
