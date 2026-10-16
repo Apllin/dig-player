@@ -31,6 +31,12 @@
     --card: var(--tg-theme-secondary-bg-color, #1c1c1c);
   }
   * { box-sizing: border-box; }
+  /* "display: flex" on #start would otherwise outrank the browser's own
+     [hidden] rule, and the start overlay never went away. */
+  [hidden] { display: none !important; }
+  /* Telegram Desktop's panel is narrower than the width it reports; keep
+     everything inside it rather than cut off at the right edge. */
+  html, body { overflow-x: hidden; max-width: 100%; }
   body { margin: 0; background: var(--bg); color: var(--fg);
          font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
          padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); }
@@ -53,8 +59,8 @@
        background: var(--card); margin-bottom: 6px; cursor: pointer; }
   li.current { outline: 2px solid var(--accent); }
   li .n { color: var(--muted); min-width: 1.6em; text-align: right; }
-  li .t { flex: 1; overflow-wrap: anywhere; }
-  li .p { color: var(--muted); font-size: 12px; }
+  li .t { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  li .p { color: var(--muted); font-size: 12px; flex-shrink: 0; }
   #error { color: #f87171; margin: 1em 0; }
 </style>
 </head>
