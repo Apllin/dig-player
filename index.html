@@ -13,7 +13,9 @@
   server, so this page is static: no backend, nothing stored, nothing logged.
 
   YouTube and SoundCloud report when a track ends, so the queue advances by
-  itself. A row with only a Bandcamp link opens Bandcamp instead: its player
+  itself. A Bandcamp find that the bot located on YouTube or SoundCloud plays
+  there and is marked "BC →", with a link back to the record. A row with only
+  a Bandcamp link opens Bandcamp instead: its player
   needs an album id the bot does not have, and reports nothing.
 
   Browsers do not let a page start sound on its own, so the first track
@@ -94,7 +96,7 @@ async function decode(fragment) {
   const stream = new Blob([fromBase64url(packed)]).stream()
     .pipeThrough(new DecompressionStream("deflate-raw"));
   const rows = JSON.parse(await new Response(stream).text());
-  return rows.map(([p, id, artist, title]) => ({ p, id, artist, title }));
+  return rows.map(([p, id, artist, title, bc]) => ({ p, id, artist, title, bc }));
 }
 
 function url(track) {
@@ -112,7 +114,8 @@ function render() {
     const n = document.createElement("span"); n.className = "n"; n.textContent = index + 1;
     const t = document.createElement("span"); t.className = "t";
     t.textContent = `${track.artist} — ${track.title}`;
-    const p = document.createElement("span"); p.className = "p"; p.textContent = LABEL[track.p];
+    const p = document.createElement("span"); p.className = "p";
+    p.textContent = track.bc ? `BC → ${LABEL[track.p]}` : LABEL[track.p];
     li.append(n, t, p);
     li.onclick = () => { started = true; play(index); };
     list.append(li);
@@ -126,6 +129,14 @@ function render() {
     const w = document.createElement("div"); w.className = "where";
     w.textContent = `${current + 1} из ${tracks.length} · ${LABEL[track.p]}`;
     now.append(a, t, w);
+    if (track.bc) {
+      // Found on YouTube or SoundCloud, but it came from Bandcamp: say so,
+      // and keep the way back to the record.
+      const bc = document.createElement("a");
+      bc.className = "where"; bc.href = track.bc; bc.textContent = "с Bandcamp ↗";
+      bc.onclick = e => { e.preventDefault(); if (tg) tg.openLink(track.bc); else window.open(track.bc, "_blank"); };
+      w.append(" · ", bc);
+    }
   }
   document.getElementById("prev").disabled = step(current, -1) < 0;
   document.getElementById("next").disabled = step(current, 1) < 0;
