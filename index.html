@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dig player</title>
+<!--
+  The digging bot's player: a Telegram Mini App that plays one reply's tracks
+  in order, through the services' own embeddable players.
+
+  The track list travels in the URL fragment (#t=…), deflate-compressed and
+  base64url-encoded by python/bot/player.py. A fragment is never sent to the
+  server, so this page is static: no backend, nothing stored, nothing logged.
+
+  YouTube and SoundCloud report when a track ends, so the queue advances by
+  itself. A row with only a Bandcamp link opens Bandcamp instead: its player
+  needs an album id the bot does not have, and reports nothing.
+
+  Browsers do not let a page start sound on its own, so the first track
+  starts on a tap; the rest follow.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #111);
+    --fg: var(--tg-theme-text-color, #eee);
+    --muted: var(--tg-theme-hint-color, #888);
+    --accent: var(--tg-theme-button-color, #3b82f6);
+    --accent-fg: var(--tg-theme-button-text-color, #fff);
+    --card: var(--tg-theme-secondary-bg-color, #1c1c1c);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); }
+  #stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000;
+           border-radius: 10px; overflow: hidden; }
+  #stage.sc { aspect-ratio: auto; height: 166px; }
+  #stage > div, #stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #start { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+           background: rgba(0,0,0,.55); color: #fff; font-size: 18px; border: 0; cursor: pointer; z-index: 2; }
+  #now { margin: 12px 2px 8px; min-height: 2.7em; }
+  #now .artist { font-weight: 600; }
+  #now .where { color: var(--muted); font-size: 13px; }
+  #controls { display: flex; gap: 8px; margin-bottom: 12px; }
+  #controls button { flex: 1; padding: 10px; border: 0; border-radius: 8px; font-size: 16px;
+                     background: var(--accent); color: var(--accent-fg); cursor: pointer; }
+  #controls button:disabled { opacity: .4; }
+  ol { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; gap: 10px; align-items: baseline; padding: 9px 10px; border-radius: 8px;
+       background: var(--card); margin-bottom: 6px; cursor: pointer; }
+  li.current { outline: 2px solid var(--accent); }
+  li .n { color: var(--muted); min-width: 1.6em; text-align: right; }
+  li .t { flex: 1; overflow-wrap: anywhere; }
+  li .p { color: var(--muted); font-size: 12px; }
+  #error { color: #f87171; margin: 1em 0; }
+</style>
+</head>
+<body>
+<div id="stage"><div id="yt"></div><button id="start" hidden>▶ Нажми, чтобы начать</button></div>
+<div id="now"></div>
+<div id="controls">
+  <button id="prev" aria-label="Предыдущий">⏮</button>
+  <button id="open" aria-label="Открыть в сервисе">↗</button>
+  <button id="next" aria-label="Следующий">⏭</button>
+</div>
+<div id="error" hidden></div>
+<ol id="list"></ol>
+
+<script>
+"use strict";
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+const LABEL = { y: "YouTube", s: "SoundCloud", b: "Bandcamp" };
+let tracks = [];          // [{p, id, artist, title}]
+let current = -1;
+let ytPlayer = null, ytReady = null, scWidget = null, started = false;
+
+function showError(text) {
+  const box = document.getElementById("error");
+  box.textContent = text;
+  box.hidden = false;
+}
+
+function fromBase64url(text) {
+  const b64 = text.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((text.length + 3) % 4);
+  return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+}
+
+async function decode(fragment) {
+  const packed = new URLSearchParams(fragment.replace(/^#/, "")).get("t");
+  if (!packed) return [];
+  const stream = new Blob([fromBase64url(packed)]).stream()
+    .pipeThrough(new DecompressionStream("deflate-raw"));
+  const rows = JSON.parse(await new Response(stream).text());
+  return rows.map(([p, id, artist, title]) => ({ p, id, artist, title }));
+}
+
+function url(track) {
+  if (track.p === "y") return "https://www.youtube.com/watch?v=" + track.id;
+  if (track.p === "s") return "https://soundcloud.com/" + track.id;
+  return track.id;
+}
+
+function render() {
+  const list = document.getElementById("list");
+  list.textContent = "";
+  tracks.forEach((track, index) => {
+    const li = document.createElement("li");
+    if (index === current) li.className = "current";
+    const n = document.createElement("span"); n.className = "n"; n.textContent = index + 1;
+    const t = document.createElement("span"); t.className = "t";
+    t.textContent = `${track.artist} — ${track.title}`;
+    const p = document.createElement("span"); p.className = "p"; p.textContent = LABEL[track.p];
+    li.append(n, t, p);
+    li.onclick = () => { started = true; play(index); };
+    list.append(li);
+  });
+  const now = document.getElementById("now");
+  now.textContent = "";
+  if (current >= 0) {
+    const track = tracks[current];
+    const a = document.createElement("div"); a.className = "artist"; a.textContent = track.artist;
+    const t = document.createElement("div"); t.textContent = track.title;
+    const w = document.createElement("div"); w.className = "where";
+    w.textContent = `${current + 1} из ${tracks.length} · ${LABEL[track.p]}`;
+    now.append(a, t, w);
+  }
+  document.getElementById("prev").disabled = step(current, -1) < 0;
+  document.getElementById("next").disabled = step(current, 1) < 0;
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = resolve; s.onerror = reject;
+    document.head.append(s);
+  });
+}
+
+function youtube() {
+  if (!ytReady) {
+    ytReady = new Promise(resolve => {
+      window.onYouTubeIframeAPIReady = () => {
+        ytPlayer = new YT.Player("yt", {
+          playerVars: { playsinline: 1, rel: 0 },
+          events: {
+            onReady: () => resolve(ytPlayer),
+            onStateChange: e => { if (e.data === YT.PlayerState.ENDED) next(); },
+            // 101/150: the uploader does not allow embedding. Skip it.
+            onError: () => setTimeout(next, 1500),
+          },
+        });
+      };
+      loadScript("https://www.youtube.com/iframe_api").catch(() => showError("YouTube не загрузился"));
+    });
+  }
+  return ytReady;
+}
+
+function clearSoundcloud() {
+  const old = document.getElementById("sc");
+  if (old) old.remove();
+  scWidget = null;
+  document.getElementById("stage").classList.remove("sc");
+}
+
+async function play(index) {
+  if (index < 0 || index >= tracks.length) return;
+  current = index;
+  render();
+  const track = tracks[index];
+  document.getElementById("start").hidden = started;
+
+  if (track.p === "y") {
+    clearSoundcloud();
+    document.getElementById("yt").style.visibility = "visible";
+    const player = await youtube();
+    if (started) player.loadVideoById(track.id); else player.cueVideoById(track.id);
+  } else if (track.p === "s") {
+    if (ytPlayer) { ytPlayer.stopVideo(); }
+    document.getElementById("yt").style.visibility = "hidden";
+    clearSoundcloud();
+    const stage = document.getElementById("stage");
+    stage.classList.add("sc");
+    const frame = document.createElement("iframe");
+    frame.id = "sc";
+    frame.allow = "autoplay";
+    frame.src = "https://w.soundcloud.com/player/?url=" + encodeURIComponent(url(track)) +
+      "&auto_play=" + (started ? "true" : "false") + "&visual=false&show_comments=false";
+    stage.append(frame);
+    if (!window.SC) await loadScript("https://w.soundcloud.com/player/api.js");
+    scWidget = SC.Widget(frame);
+    scWidget.bind(SC.Widget.Events.FINISH, () => next());
+  } else {
+    // Bandcamp only: open it in the browser and move on in the queue.
+    if (tg) tg.openLink(url(track)); else window.open(url(track), "_blank");
+  }
+}
+
+// The queue moves past Bandcamp-only rows: opening a browser by itself in the
+// middle of listening would be worse than skipping. Tapping one opens it.
+function step(from, direction) {
+  for (let i = from + direction; i >= 0 && i < tracks.length; i += direction) {
+    if (tracks[i].p !== "b") return i;
+  }
+  return -1;
+}
+function next() { const i = step(current, 1); if (i >= 0) play(i); }
+
+document.getElementById("prev").onclick = () => {
+  const i = step(current, -1); if (i >= 0) { started = true; play(i); }
+};
+document.getElementById("next").onclick = () => { started = true; next(); };
+document.getElementById("open").onclick = () => {
+  if (current < 0) return;
+  if (tg) tg.openLink(url(tracks[current])); else window.open(url(tracks[current]), "_blank");
+};
+document.getElementById("start").onclick = () => {
+  started = true;
+  document.getElementById("start").hidden = true;
+  play(current < 0 ? 0 : current);
+};
+
+(async () => {
+  try {
+    tracks = await decode(location.hash);
+  } catch (err) {
+    showError("Не получилось прочитать список треков.");
+    return;
+  }
+  if (!tracks.length) { showError("В подборке нет треков, которые можно проиграть."); return; }
+  const first = tracks.findIndex(t => t.p !== "b");
+  current = first < 0 ? 0 : first;
+  render();
+  document.getElementById("start").hidden = false;
+  if (tracks[current].p === "y") youtube().then(p => p.cueVideoById(tracks[current].id));
+})();
+</script>
+</body>
+</html>
