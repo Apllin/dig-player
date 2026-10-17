@@ -113,6 +113,35 @@ function star(track) {
   } catch (_) {}
   render();
 }
+// --- the apps: logged in, and they keep playing in the background ----------
+//
+// On a phone a page opened from here is a browser that is not logged in, and
+// this player falls silent once it is out of sight. The services' own apps
+// have neither problem. Bandcamp's app answers only a signed link; the bot
+// sends "a123.<sig>" and this rebuilds it (bandcamp_app.app_url() in the bot
+// builds the same string).
+const PHONE = !!tg && ["ios", "android"].includes(tg.platform);
+
+function bandcampApp(compact) {
+  const [head, sig] = compact.split(".");
+  const inner = `x-bandcamp://show_tralbum?tralbum_type=${head[0]}&tralbum_id=${head.slice(1)}&play=1`;
+  return "https://bandcamp.com/redirect_to_app?fallback_url=" +
+    encodeURIComponent("https://bandcamp.com/this_is_an_appstore_url?app=fan_app") +
+    "&url=" + encodeURIComponent(inner) + "&sig=" + sig;
+}
+
+// Where "in the app" goes for this track, or "" when there is no app link.
+function appLink(track) {
+  if (track.app) return bandcampApp(track.app);
+  if (track.p === "s") return "https://soundcloud.com/" + track.id;
+  if (track.p === "y") return "https://music.youtube.com/watch?v=" + track.id;
+  return "";
+}
+
+function openOutside(link) {
+  if (tg) tg.openLink(link); else window.open(link, "_blank");
+}
+
 function bandcampButton(track) {
   const button = document.createElement("button");
   button.className = "bc";
@@ -120,7 +149,8 @@ function bandcampButton(track) {
   button.title = "Открыть на Bandcamp";
   button.onclick = event => {
     event.stopPropagation();
-    if (tg) tg.openLink(track.bc); else window.open(track.bc, "_blank");
+    // On a phone, the app, where the login is; elsewhere the page.
+    openOutside(PHONE && track.app ? bandcampApp(track.app) : track.bc);
   };
   return button;
 }
@@ -219,10 +249,11 @@ async function decode(fragment) {
   const rows = JSON.parse(await new Response(stream).text());
   // [service, id, artist, title, token, bandcamp url]. Links made before the
   // token existed put the Bandcamp URL fifth; tell them apart by its shape.
-  return rows.map(([p, id, artist, title, fifth, sixth]) =>
+  // A seventh field, when the bot has it, opens the release in the Bandcamp app.
+  return rows.map(([p, id, artist, title, fifth, sixth, seventh]) =>
     fifth && fifth.startsWith("http")
       ? { p, id, artist, title, token: "", bc: fifth }
-      : { p, id, artist, title, token: fifth || "", bc: sixth });
+      : { p, id, artist, title, token: fifth || "", bc: sixth, app: seventh || "" });
 }
 
 // A Bandcamp row with a numeric id is a whole release Bandcamp's own player
@@ -273,8 +304,17 @@ function render() {
     if (track.bc) {
       // The record's Bandcamp page: to follow the artist or label there.
       const bc = bandcampButton(track);
-      bc.textContent = "Bandcamp ↗";
+      bc.textContent = PHONE && track.app ? "В приложении Bandcamp ↗" : "Bandcamp ↗";
       now.append(bc);
+    }
+    // To listen with the screen locked or Telegram in use: the service's app.
+    // Bandcamp's own button above already does that when it has the link.
+    if (PHONE && !(track.bc && track.app) && appLink(track)) {
+      const go = document.createElement("button");
+      go.className = "bc";
+      go.textContent = track.p === "s" ? "Слушать в SoundCloud ↗" : "Слушать в YouTube Music ↗";
+      go.onclick = () => { pauseAll(); openOutside(appLink(track)); };
+      now.append(go);
     }
   }
   document.getElementById("prev").disabled = step(current, -1) < 0;
