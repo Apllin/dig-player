@@ -413,6 +413,7 @@ async function play(index) {
   resumeAt = 0;
   position = startAt;
   current = index;
+  announce(tracks[index]);
   render();
   const track = tracks[index];
   document.getElementById("start").hidden = started;
@@ -492,6 +493,26 @@ document.getElementById("prev").onclick = () => {
   const i = step(current, -1); if (i >= 0) { started = true; play(i); }
 };
 document.getElementById("next").onclick = () => { started = true; next(); };
+
+// Headphone and keyboard ⏮ ⏭: the Media Session API. The sound itself plays
+// inside the services' frames, and the system may hand those keys to the
+// frame that plays rather than to this page — where it does reach this page,
+// the keys move through this list.
+if ("mediaSession" in navigator) {
+  const handle = (action, run) => {
+    try { navigator.mediaSession.setActionHandler(action, run); } catch (_) { /* unsupported action */ }
+  };
+  handle("previoustrack", () => document.getElementById("prev").onclick());
+  handle("nexttrack", () => document.getElementById("next").onclick());
+}
+
+function announce(track) {
+  if (!("mediaSession" in navigator) || !window.MediaMetadata) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata(
+      { title: track.title, artist: track.artist, album: track.release || "" });
+  } catch (_) { /* metadata is a nicety */ }
+}
 document.getElementById("open").onclick = () => {
   if (current < 0) return;
   if (tg) tg.openLink(url(tracks[current])); else window.open(url(tracks[current]), "_blank");
