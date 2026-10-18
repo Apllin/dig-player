@@ -84,7 +84,11 @@
 <script>
 "use strict";
 const tg = window.Telegram && window.Telegram.WebApp;
-if (tg) { tg.ready(); tg.expand(); }
+if (tg) {
+  tg.ready(); tg.expand();
+  // A swipe down scrolls the page instead of folding the Mini App away.
+  if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+}
 
 const LABEL = { y: "YouTube", s: "SoundCloud", b: "Bandcamp" };
 let tracks = [];          // [{p, id, artist, title}]
@@ -431,8 +435,11 @@ async function play(index) {
     const single = track.id.startsWith("t");
     frame.src = "https://bandcamp.com/EmbeddedPlayer/" +
       (single ? "track=" + track.id.slice(1) : "album=" + track.id) +
+      // A release: small artwork, so the frame's height goes to the track
+      // list — on an iPhone the list inside the frame cannot be scrolled, so
+      // what does not fit cannot be reached. A single has no list: big art.
       "/size=large/bgcol=" + hex("--bg", "ffffff") + "/linkcol=" + hex("--accent", "0687f5") +
-      "/tracklist=" + (single ? "false" : "true") + "/transparent=true/";
+      (single ? "/tracklist=false" : "/artwork=small/tracklist=true") + "/transparent=true/";
     stage.append(frame);
   } else {
     // Bandcamp with no release id: open it in the browser.
