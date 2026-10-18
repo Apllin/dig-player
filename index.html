@@ -432,8 +432,13 @@ async function play(index) {
     const frame = document.createElement("iframe");
     frame.id = "sc";
     frame.allow = "autoplay";
+    // Not on a phone: there iOS lets the widget's sound start only from a tap
+    // inside the widget, so asked to start by itself it covers itself with a
+    // full-size "Play on SoundCloud / Listen in browser" screen (its
+    // "mobilePrestitial") to get that tap. Its own ▶ asks for the same one tap
+    // without covering anything.
     frame.src = "https://w.soundcloud.com/player/?url=" + encodeURIComponent(url(track)) +
-      "&auto_play=" + (started ? "true" : "false") + "&visual=false&show_comments=false";
+      "&auto_play=" + (started && !PHONE ? "true" : "false") + "&visual=false&show_comments=false";
     stage.append(frame);
     if (!window.SC) await loadScript("https://w.soundcloud.com/player/api.js");
     scWidget = SC.Widget(frame);
