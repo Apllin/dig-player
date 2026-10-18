@@ -177,6 +177,21 @@ function bandcampButton(track) {
   return button;
 }
 
+// 🔎: dig on from this track — the bot answers in the chat with what sounds
+// like it, as if "Artist - Title" had been typed ("dg_<token>").
+function digButton(track) {
+  const button = document.createElement("button");
+  button.className = "star";
+  button.textContent = "🔎";
+  button.title = "Похожие на этот трек";
+  button.onclick = event => {
+    event.stopPropagation();
+    const link = `https://t.me/${bot}?start=dg_${track.token}`;
+    if (tg && tg.openTelegramLink) tg.openTelegramLink(link); else window.open(link, "_blank");
+  };
+  return button;
+}
+
 function starButton(track) {
   const button = document.createElement("button");
   button.className = "star";
@@ -322,7 +337,7 @@ function render() {
       : LABEL[track.p];
     li.append(n, t, p);
     if (track.bc) li.append(bandcampButton(track));
-    if (bot && track.token) li.append(starButton(track));
+    if (bot && track.token) li.append(digButton(track), starButton(track));
     li.onclick = () => { started = true; play(index); };
     list.append(li);
   });
@@ -338,7 +353,7 @@ function render() {
     if (bot && track.token) {
       const saveNow = starButton(track);
       saveNow.id = "star";
-      a.append(" ", saveNow);
+      a.append(" ", saveNow, " ", digButton(track));
     }
     if (track.part) {
       w.textContent += ` · трек ${track.part} релиза «${track.release}»; к следующему — ⏭`;
