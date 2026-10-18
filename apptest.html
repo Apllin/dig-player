@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проверка Bandcamp</title>
+<!--
+  Which link opens a release in the Bandcamp app rather than on a blank screen?
+  Both kinds tried so far (the signed https redirect and the bare scheme) open
+  the app on a white screen. One release, Translusid — TRANS016 (album
+  762489972, band 2639399683), every variant as a button; whichever shows the
+  release is what the player will use.
+-->
+<style>
+  :root { --bg: #ffffff; --fg: #1a1a1a; --muted: #6b6b6b; --accent: #0687f5; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #17181a; --fg: #ececec; --muted: #9a9a9a; --accent: #4aa8ff; }
+  }
+  :root[data-theme="dark"] { --bg: #17181a; --fg: #ececec; --muted: #9a9a9a; --accent: #4aa8ff; }
+  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg);
+         font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { color: var(--muted); margin: 0 0 16px; }
+  a { display: block; margin: 10px 0; padding: 12px 14px; border-radius: 10px;
+      background: var(--accent); color: #fff; text-decoration: none; }
+  small { display: block; opacity: .8; font-size: 12px; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>Какая ссылка открывает релиз?</h1>
+<p>Нажми по очереди. После каждой вернись сюда и запомни букву, если в приложении Bandcamp открылся релиз TRANS016 (а не белый экран).</p>
+<div id="list"></div>
+<script>
+  const album = "762489972", band = "2639399683";
+  const variants = [
+    ["A", `x-bandcamp://show_tralbum?tralbum_type=a&tralbum_id=${album}&play=1`],
+    ["B", `x-bandcamp://show_tralbum?tralbum_type=a&tralbum_id=${album}`],
+    ["C", `x-bandcamp://show_tralbum?band_id=${band}&tralbum_type=a&tralbum_id=${album}`],
+    ["D", `x-bandcamp://show_tralbum?band_id=${band}&tralbum_type=a&tralbum_id=${album}&play=1`],
+    ["E", `x-bandcamp://show_tralbum?tralbum_type=album&tralbum_id=${album}&band_id=${band}`],
+    ["F", `x-bandcamp://show_band?band_id=${band}`],
+    ["G", `x-bandcamp://open`],
+    ["H", "https://bandcamp.com/redirect_to_app?fallback_url=https%3A%2F%2Fbandcamp.com%2Fthis_is_an_appstore_url%3Fapp%3Dfan_app&url=x-bandcamp%3A%2F%2Fshow_tralbum%3Ftralbum_type%3Da%26tralbum_id%3D762489972%26play%3D1&sig=aee92e848bc84da6d603a6609ed21e39"],
+  ];
+  const list = document.getElementById("list");
+  for (const [letter, link] of variants) {
+    const a = document.createElement("a");
+    a.href = link;
+    a.textContent = "Вариант " + letter;
+    const small = document.createElement("small");
+    small.textContent = link;
+    a.append(small);
+    list.append(a);
+  }
+</script>
+</body>
+</html>
