@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Открыть в Bandcamp</title>
+<!--
+  A step between the player and the Bandcamp app. The app is opened by its own
+  scheme, "x-bandcamp://show_tralbum?…" (what bandcamp.com's redirect page
+  itself sends a phone to), and a Telegram Mini App can open only http(s)
+  links — so the player opens this page in the browser, and this page goes on
+  to the app. Only that one kind of app link is followed; anything else in the
+  fragment is ignored, so this page cannot be used to send anyone elsewhere.
+-->
+<style>
+  :root { --bg: #ffffff; --fg: #1a1a1a; --muted: #6b6b6b; --accent: #0687f5; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #17181a; --fg: #ececec; --muted: #9a9a9a; --accent: #4aa8ff; }
+  }
+  :root[data-theme="dark"] { --bg: #17181a; --fg: #ececec; --muted: #9a9a9a; --accent: #4aa8ff; }
+  body { margin: 0; padding: 32px 16px; background: var(--bg); color: var(--fg);
+         font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: center; }
+  a.button { display: block; max-width: 320px; margin: 16px auto; padding: 14px 16px;
+             border-radius: 10px; background: var(--accent); color: #fff; text-decoration: none; }
+  a.plain { color: var(--accent); }
+  p { color: var(--muted); }
+</style>
+</head>
+<body>
+<p id="note">Открываю приложение Bandcamp…</p>
+<a class="button" id="app" hidden>Открыть в приложении Bandcamp</a>
+<p><a class="plain" id="web" hidden>или страницу релиза в браузере</a></p>
+<script>
+  const params = new URLSearchParams(location.hash.slice(1));
+  const app = params.get("app") || "";
+  const web = params.get("web") || "";
+  const appOk = /^x-bandcamp:\/\/show_tralbum\?tralbum_type=[at]&tralbum_id=\d+(&play=1)?$/.test(app);
+  const webOk = /^https:\/\/[^\s"<>]+$/.test(web);
+  if (webOk) { const w = document.getElementById("web"); w.href = web; w.hidden = false; }
+  if (appOk) {
+    const a = document.getElementById("app");
+    a.href = app; a.hidden = false;
+    location.replace(app);
+    // If the app did not take over, the button stays for a tap.
+    setTimeout(() => {
+      document.getElementById("note").textContent = "Если приложение не открылось — нажми:";
+    }, 1500);
+  } else {
+    document.getElementById("note").textContent = "Не знаю такой ссылки.";
+  }
+</script>
+</body>
+</html>

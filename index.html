@@ -117,22 +117,36 @@ function star(track) {
 //
 // On a phone a page opened from here is a browser that is not logged in, and
 // this player falls silent once it is out of sight. The services' own apps
-// have neither problem. Bandcamp's app answers only a signed link; the bot
-// sends "a123.<sig>" and this rebuilds it (bandcamp_app.app_url() in the bot
-// builds the same string).
+// have neither problem.
+//
+// Bandcamp's app is opened by its scheme, x-bandcamp://show_tralbum?… — the
+// signed https link the app also answers opens it on an empty screen (tried
+// on an iPhone, 2026-10-18). A Mini App can open only http(s) links, so the
+// scheme goes through open.html, which hands it on. The release id comes from
+// the row itself for a Bandcamp row, and from the bot's seventh field
+// ("a123.<sig>") for a track found elsewhere that came from Bandcamp.
 const PHONE = !!tg && ["ios", "android"].includes(tg.platform);
 
-function bandcampApp(compact) {
-  const [head, sig] = compact.split(".");
-  const inner = `x-bandcamp://show_tralbum?tralbum_type=${head[0]}&tralbum_id=${head.slice(1)}&play=1`;
-  return "https://bandcamp.com/redirect_to_app?fallback_url=" +
-    encodeURIComponent("https://bandcamp.com/this_is_an_appstore_url?app=fan_app") +
-    "&url=" + encodeURIComponent(inner) + "&sig=" + sig;
+function bandcampScheme(track) {
+  let head = "";
+  if (track.app) head = track.app.split(".")[0];
+  else if (track.p === "b" && /^t?\d+$/.test(track.id)) head = /^t/.test(track.id) ? track.id : "a" + track.id;
+  if (!/^[at]\d+$/.test(head)) return "";
+  return `x-bandcamp://show_tralbum?tralbum_type=${head[0]}&tralbum_id=${head.slice(1)}&play=1`;
+}
+
+function bandcampApp(track) {
+  const scheme = bandcampScheme(track);
+  if (!scheme) return "";
+  const page = new URL("open.html", location.href);
+  page.hash = new URLSearchParams({ app: scheme, web: track.bc || "" }).toString();
+  return page.toString();
 }
 
 // Where "in the app" goes for this track, or "" when there is no app link.
 function appLink(track) {
-  if (track.app) return bandcampApp(track.app);
+  const bandcamp = bandcampApp(track);
+  if (bandcamp) return bandcamp;
   if (track.p === "s") return "https://soundcloud.com/" + track.id;
   if (track.p === "y") return "https://music.youtube.com/watch?v=" + track.id;
   return "";
@@ -150,7 +164,7 @@ function bandcampButton(track) {
   button.onclick = event => {
     event.stopPropagation();
     // On a phone, the app, where the login is; elsewhere the page.
-    openOutside(PHONE && track.app ? bandcampApp(track.app) : track.bc);
+    openOutside(PHONE && bandcampApp(track) ? bandcampApp(track) : track.bc);
   };
   return button;
 }
@@ -304,12 +318,12 @@ function render() {
     if (track.bc) {
       // The record's Bandcamp page: to follow the artist or label there.
       const bc = bandcampButton(track);
-      bc.textContent = PHONE && track.app ? "В приложении Bandcamp ↗" : "Bandcamp ↗";
+      bc.textContent = PHONE && bandcampApp(track) ? "В приложении Bandcamp ↗" : "Bandcamp ↗";
       now.append(bc);
     }
     // To listen with the screen locked or Telegram in use: the service's app.
     // Bandcamp's own button above already does that when it has the link.
-    if (PHONE && !(track.bc && track.app) && appLink(track)) {
+    if (PHONE && !(track.bc && bandcampApp(track)) && appLink(track)) {
       const go = document.createElement("button");
       go.className = "bc";
       go.textContent = track.p === "s" ? "Слушать в SoundCloud ↗" : "Слушать в YouTube Music ↗";
