@@ -105,10 +105,13 @@ function savedTokens() {
 }
 function star(track) {
   if (!bot || !track.token) return;
-  const link = `https://t.me/${bot}?start=sv_${track.token}`;
+  // ★ again takes the track back out of the saved list ("uv_").
+  const saved = savedTokens();
+  const undo = saved.has(track.token);
+  const link = `https://t.me/${bot}?start=${undo ? "uv" : "sv"}_${track.token}`;
   if (tg && tg.openTelegramLink) tg.openTelegramLink(link); else window.open(link, "_blank");
   try {
-    const saved = savedTokens(); saved.add(track.token);
+    if (undo) saved.delete(track.token); else saved.add(track.token);
     localStorage.setItem(SAVED_KEY, JSON.stringify([...saved].slice(-500)));
   } catch (_) {}
   render();
@@ -174,8 +177,8 @@ function starButton(track) {
   button.className = "star";
   const done = savedTokens().has(track.token);
   button.textContent = done ? "★" : "☆";
-  button.title = done ? "Сохранено" : "Сохранить в боте";
-  button.onclick = event => { event.stopPropagation(); if (!done) star(track); };
+  button.title = done ? "Убрать из сохранённого" : "Сохранить в боте";
+  button.onclick = event => { event.stopPropagation(); star(track); };
   return button;
 }
 
