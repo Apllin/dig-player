@@ -137,7 +137,8 @@ const PHONE = !!tg && ["ios", "android"].includes(tg.platform);
 function bandcampScheme(track) {
   let head = "";
   if (track.app) head = track.app.split(".")[0];
-  else if (track.p === "b" && /^t?\d+$/.test(track.id)) head = /^t/.test(track.id) ? track.id : "a" + track.id;
+  else if (track.p === "b" && /^(t?\d+|\d+:\d+)$/.test(track.id))
+    head = /^t/.test(track.id) ? track.id : "a" + track.id.split(":")[0];
   if (!/^[at]\d+$/.test(head)) return "";
   return `x-bandcamp://show_tralbum?tralbum_type=${head[0]}&tralbum_id=${head.slice(1)}&play=1`;
 }
@@ -270,17 +271,35 @@ async function decode(fragment) {
   const rows = JSON.parse(await new Response(stream).text());
   // [service, id, artist, title, token, bandcamp url]. Links made before the
   // token existed put the Bandcamp URL fifth; tell them apart by its shape.
-  // A seventh field, when the bot has it, opens the release in the Bandcamp app.
-  return rows.map(([p, id, artist, title, fifth, sixth, seventh]) =>
-    fifth && fifth.startsWith("http")
-      ? { p, id, artist, title, token: "", bc: fifth }
-      : { p, id, artist, title, token: fifth || "", bc: sixth, app: seventh || "" });
+  // A seventh field, when the bot has it, opens the release in the Bandcamp app;
+  // an eighth is a release's track list, [[track id, title, artist?], …].
+  return rows.flatMap(([p, id, artist, title, fifth, sixth, seventh, eighth]) => {
+    if (fifth && fifth.startsWith("http")) return [{ p, id, artist, title, token: "", bc: fifth }];
+    const row = { p, id, artist, title, token: fifth || "", bc: sixth, app: seventh || "" };
+    return eighth && eighth.length > 1 ? releaseTracks(row, eighth) : [row];
+  });
+}
+
+// A Bandcamp release, a track at a time: then this page knows which track is
+// playing, and ☆ saves that track — Bandcamp's own player tells its page
+// nothing (it posts one message, "playerinited", and nothing after). Each
+// track is "album id:track id"; its ☆ token is the release's plus "-n",
+// which the bot reads against the track list it kept. Bandcamp's player does
+// not say when a track ends either, so the next one is ⏭ away.
+function releaseTracks(release, listed) {
+  return listed.map(([trackId, title, artist], index) => ({
+    p: "b", id: `${release.id}:${trackId}`, artist: artist || release.artist, title,
+    token: release.token ? `${release.token}-${index + 1}` : "",
+    bc: release.bc, app: release.app,
+    release: release.title, part: `${index + 1} из ${listed.length}`,
+  }));
 }
 
 // A Bandcamp row with a numeric id is a whole release Bandcamp's own player
 // can play; one with a URL instead can only be opened in the browser.
-// A Bandcamp id is a release ("123") or a single track ("t123").
-function embeddable(track) { return track.p !== "b" || /^t?\d+$/.test(track.id); }
+// A Bandcamp id is a release ("123"), a single track ("t123"), or one track
+// of a release ("123:456").
+function embeddable(track) { return track.p !== "b" || /^(t?\d+|\d+:\d+)$/.test(track.id); }
 
 function url(track) {
   if (track.p === "y") return "https://www.youtube.com/watch?v=" + track.id;
@@ -298,7 +317,9 @@ function render() {
     const t = document.createElement("span"); t.className = "t";
     t.textContent = `${track.artist} — ${track.title}`;
     const p = document.createElement("span"); p.className = "p";
-    p.textContent = track.p === "b" && embeddable(track) ? (track.id.startsWith("t") ? "Bandcamp" : "Bandcamp · релиз") : LABEL[track.p];
+    p.textContent = track.part ? `Bandcamp · ${track.part}`
+      : track.p === "b" && embeddable(track) ? (track.id.startsWith("t") ? "Bandcamp" : "Bandcamp · релиз")
+      : LABEL[track.p];
     li.append(n, t, p);
     if (track.bc) li.append(bandcampButton(track));
     if (bot && track.token) li.append(starButton(track));
@@ -319,7 +340,9 @@ function render() {
       saveNow.id = "star";
       a.append(" ", saveNow);
     }
-    if (track.p === "b") {
+    if (track.part) {
+      w.textContent += ` · трек ${track.part} релиза «${track.release}»; к следующему — ⏭`;
+    } else if (track.p === "b") {
       w.textContent += " · релиз целиком; к следующему — ⏭";
     }
     if (track.bc) {
@@ -432,9 +455,11 @@ async function play(index) {
     const frame = document.createElement("iframe");
     frame.id = "bc";
     frame.allow = "autoplay";
-    const single = track.id.startsWith("t");
+    const [albumId, trackId] = track.id.split(":");
+    const single = track.id.startsWith("t") || !!trackId;
     frame.src = "https://bandcamp.com/EmbeddedPlayer/" +
-      (single ? "track=" + track.id.slice(1) : "album=" + track.id) +
+      (trackId ? `album=${albumId}/track=${trackId}`
+       : track.id.startsWith("t") ? "track=" + track.id.slice(1) : "album=" + track.id) +
       // A release: small artwork, so the frame's height goes to the track
       // list — on an iPhone the list inside the frame cannot be scrolled, so
       // what does not fit cannot be reached. A single has no list: big art.
