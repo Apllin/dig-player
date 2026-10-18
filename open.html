@@ -34,7 +34,7 @@
   const params = new URLSearchParams(location.hash.slice(1));
   const app = params.get("app") || "";
   const web = params.get("web") || "";
-  const appOk = /^x-bandcamp:\/\/show_tralbum\?tralbum_type=[at]&tralbum_id=\d+(&play=1)?$/.test(app);
+  const appOk = /^x-bandcamp:\/\/show_tralbum\?band_id=\d+&tralbum_type=[at]&tralbum_id=\d+$/.test(app);
   const webOk = /^https:\/\/[^\s"<>]+$/.test(web);
   if (webOk) { const w = document.getElementById("web"); w.href = web; w.hidden = false; }
   if (appOk) {

@@ -126,21 +126,19 @@ function star(track) {
 // this player falls silent once it is out of sight. The services' own apps
 // have neither problem.
 //
-// Bandcamp's app is opened by its scheme, x-bandcamp://show_tralbum?… — the
-// signed https link the app also answers opens it on an empty screen (tried
-// on an iPhone, 2026-10-18). A Mini App can open only http(s) links, so the
-// scheme goes through open.html, which hands it on. The release id comes from
-// the row itself for a Bandcamp row, and from the bot's seventh field
-// ("a123.<sig>") for a track found elsewhere that came from Bandcamp.
+// Bandcamp's app is opened by its scheme, and only this form shows the
+// release (eight were tried on an iPhone, 2026-10-19, webapp/apptest.html):
+//   x-bandcamp://show_tralbum?band_id=…&tralbum_type=a&tralbum_id=…
+// Without band_id, with play=1, or by the signed https link, it opens on a
+// blank screen. A Mini App can open only http(s) links, so the scheme goes
+// through open.html. Both ids come from the bot's seventh field, "a123.456"
+// (release or single "t…", then its band), read off the release page.
 const PHONE = !!tg && ["ios", "android"].includes(tg.platform);
 
 function bandcampScheme(track) {
-  let head = "";
-  if (track.app) head = track.app.split(".")[0];
-  else if (track.p === "b" && /^(t?\d+|\d+:\d+)$/.test(track.id))
-    head = /^t/.test(track.id) ? track.id : "a" + track.id.split(":")[0];
-  if (!/^[at]\d+$/.test(head)) return "";
-  return `x-bandcamp://show_tralbum?tralbum_type=${head[0]}&tralbum_id=${head.slice(1)}&play=1`;
+  const found = /^([at])(\d+)\.(\d+)$/.exec(track.app || "");
+  if (!found) return "";
+  return `x-bandcamp://show_tralbum?band_id=${found[3]}&tralbum_type=${found[1]}&tralbum_id=${found[2]}`;
 }
 
 function bandcampApp(track) {
