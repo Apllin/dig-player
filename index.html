@@ -107,13 +107,39 @@ function savedTokens() {
   try { return new Set(JSON.parse(localStorage.getItem(SAVED_KEY) || "[]")); }
   catch (_) { return new Set(); }
 }
+// Is this a phone? The two differ in more than one place: a phone cannot be
+// sent to a logged-out browser tab, and it is the one platform where the
+// t.me start payload arrives.
+const PHONE = !!tg && ["ios", "android"].includes(tg.platform);
+
+// Opening the bot with a payload, from either ☆ or 🔎.
+//
+// The https t.me form carries the payload on a phone. On a laptop it does not:
+// Telegram opens the chat that is already there, the bot receives a bare
+// "/start" and answers with its help text — which is exactly what ☆ did on
+// desktop, and nothing was saved. The tg://resolve form names the parameter
+// instead of hiding it in a URL the client may shortcut, so it is tried first
+// off the phone, with the https form left as the fallback.
+function openBotStart(payload) {
+  if (!bot) return;
+  const web = `https://t.me/${bot}?start=${encodeURIComponent(payload)}`;
+  if (!tg || !tg.openTelegramLink) { window.open(web, "_blank"); return; }
+  if (!PHONE) {
+    try {
+      tg.openTelegramLink(
+        `tg://resolve?domain=${encodeURIComponent(bot)}&start=${encodeURIComponent(payload)}`);
+      return;
+    } catch (_) { /* fall through to the https form */ }
+  }
+  tg.openTelegramLink(web);
+}
+
 function star(track) {
   if (!bot || !track.token) return;
   // ★ again takes the track back out of the saved list ("uv_").
   const saved = savedTokens();
   const undo = saved.has(track.token);
-  const link = `https://t.me/${bot}?start=${undo ? "uv" : "sv"}_${track.token}`;
-  if (tg && tg.openTelegramLink) tg.openTelegramLink(link); else window.open(link, "_blank");
+  openBotStart(`${undo ? "uv" : "sv"}_${track.token}`);
   try {
     if (undo) saved.delete(track.token); else saved.add(track.token);
     localStorage.setItem(SAVED_KEY, JSON.stringify([...saved].slice(-500)));
@@ -133,7 +159,6 @@ function star(track) {
 // blank screen. A Mini App can open only http(s) links, so the scheme goes
 // through open.html. Both ids come from the bot's seventh field, "a123.456"
 // (release or single "t…", then its band), read off the release page.
-const PHONE = !!tg && ["ios", "android"].includes(tg.platform);
 
 function bandcampScheme(track) {
   const found = /^([at])(\d+)\.(\d+)$/.exec(track.app || "");
@@ -184,8 +209,7 @@ function digButton(track) {
   button.title = "Похожие на этот трек";
   button.onclick = event => {
     event.stopPropagation();
-    const link = `https://t.me/${bot}?start=dg_${track.token}`;
-    if (tg && tg.openTelegramLink) tg.openTelegramLink(link); else window.open(link, "_blank");
+    openBotStart(`dg_${track.token}`);
   };
   return button;
 }
@@ -315,7 +339,10 @@ function releaseTracks(release, listed) {
 function embeddable(track) { return track.p !== "b" || /^(t?\d+|\d+:\d+)$/.test(track.id); }
 
 function url(track) {
-  if (track.p === "y") return "https://www.youtube.com/watch?v=" + track.id;
+  // music.youtube.com, not www: the YouTube Music app is where a signed-in
+  // library and the ★ already are, and a plain youtube.com link lands in a
+  // browser that is logged out.
+  if (track.p === "y") return "https://music.youtube.com/watch?v=" + track.id;
   if (track.p === "s") return "https://soundcloud.com/" + track.id;
   return track.bc || track.id;
 }
