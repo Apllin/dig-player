@@ -67,6 +67,11 @@
   #now button.bc { margin-top: 6px; font-size: 14px; padding: 4px 10px; }
   li .star, #star { background: none; border: 0; color: var(--accent); font-size: 18px;
                     line-height: 1; padding: 0 2px; cursor: pointer; flex-shrink: 0; }
+  /* The one control that leaves the player, so it says so plainly rather than
+     sitting among the transport buttons where a thumb lands by accident. */
+  #sync { display: block; width: 100%; margin: 10px 0 2px; padding: 10px;
+          background: none; border: 1px solid var(--accent); color: var(--accent);
+          border-radius: 8px; font-size: 15px; cursor: pointer; }
   #error { color: #f87171; margin: 1em 0; }
 </style>
 </head>
@@ -78,6 +83,7 @@
   <button id="open" aria-label="Открыть в сервисе">↗</button>
   <button id="next" aria-label="Следующий">⏭</button>
 </div>
+<button id="sync" hidden></button>
 <div id="error" hidden></div>
 <ol id="list"></ol>
 
@@ -99,13 +105,43 @@ let bot = "";                // the bot's username, for ☆ to send a track back
 // --- ☆: saving a track to the bot's saved list -------------------------------
 //
 // An inline Mini App cannot send data to the bot directly. It can open a
-// Telegram link, though, and "t.me/<bot>?start=sv_<token>" arrives in the chat
-// as "/start sv_<token>": the bot saves the track the token names, then
-// deletes both messages. Stars already pressed are remembered here.
+// Telegram link, and "t.me/<bot>?start=sv_…" arrives in the chat as a command
+// the bot acts on — but opening any Telegram link closes the Mini App and
+// stops the music. That is Telegram's behaviour, not something this page can
+// refuse, and on a laptop it was the whole cost of one star.
+//
+// So ☆ no longer goes anywhere. It marks the track here, instantly, and the
+// marks wait. One press of "↑ Отправить боту" hands over everything waiting in
+// a single trip to the chat — the one moment the player closes, and one the
+// listener chose.
+//
+// Fitting a session's stars into that one trip is why a queue has an id. A
+// start payload holds 64 characters; a token is 12, so four would be the whole
+// budget. A place in the queue is two or three ("7", "7.2" for a track inside
+// a release), so twenty fit. Links made before queues had ids carry no "q" —
+// those fall back to sending one token per trip.
 const SAVED_KEY = "dig-player:saved";
+const PENDING_KEY = "dig-player:pending";
+const PAYLOAD_MAX = 64;
+let queueId = "";
 function savedTokens() {
   try { return new Set(JSON.parse(localStorage.getItem(SAVED_KEY) || "[]")); }
   catch (_) { return new Set(); }
+}
+
+/** What has been starred (or unstarred) here and not yet told to the bot:
+ * [{place, token, drop}], oldest first. Kept per list, so closing the player
+ * mid-session does not lose the marks. */
+function pending() {
+  try {
+    const kept = JSON.parse(localStorage.getItem(PENDING_KEY) || "[]");
+    return Array.isArray(kept) ? kept : [];
+  } catch (_) { return []; }
+}
+
+function setPending(items) {
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify(items.slice(-200))); }
+  catch (_) { /* the marks still work for this session */ }
 }
 // Is this a phone? The two differ in more than one place: a phone cannot be
 // sent to a logged-out browser tab, and it is the one platform where the
@@ -136,15 +172,73 @@ function openBotStart(payload) {
 
 function star(track) {
   if (!bot || !track.token) return;
-  // ★ again takes the track back out of the saved list ("uv_").
   const saved = savedTokens();
   const undo = saved.has(track.token);
-  openBotStart(`${undo ? "uv" : "sv"}_${track.token}`);
+  // A star pressed and unpressed before the hand-over is not two instructions
+  // for the bot: it is none. A track therefore has at most one mark waiting,
+  // and pressing again cancels it rather than queueing its opposite.
+  const waiting = pending();
+  const already = waiting.some(item => item.token === track.token);
+  const rest = waiting.filter(item => item.token !== track.token);
+  setPending(already ? rest
+    : rest.concat([{ place: track.place || "", token: track.token, drop: undo }]));
   try {
     if (undo) saved.delete(track.token); else saved.add(track.token);
     localStorage.setItem(SAVED_KEY, JSON.stringify([...saved].slice(-500)));
   } catch (_) {}
   render();
+}
+
+/** The payload for the next trip, and what it carries: as many waiting marks
+ * of one kind as fit in 64 characters, in the order they were made. */
+function nextPayload() {
+  const waiting = pending();
+  if (!waiting.length) return null;
+  const drop = waiting[0].drop;                 // adds and removals travel apart
+  const head = drop ? "uv_" : "sv_";
+  const taken = [];
+  let payload = "";
+  for (const item of waiting) {
+    if (item.drop !== drop) break;
+    // With a queue id the mark is a place in it; without one — an old link —
+    // the token itself, which leaves room for a single mark per trip.
+    const piece = queueId && item.place ? item.place : item.token;
+    const grown = payload
+      ? `${payload}-${piece}`
+      : head + (queueId && item.place ? `${queueId}-${piece}` : piece);
+    if (grown.length > PAYLOAD_MAX) break;
+    payload = grown;
+    taken.push(item);
+  }
+  return payload ? { payload, taken } : null;
+}
+
+/** Hand the waiting marks over. This is the one place the player closes. */
+function sendPending() {
+  const next = nextPayload();
+  if (!next) return;
+  // By what the mark says, not by which object holds it: every pending() call
+  // parses the store afresh, so the items taken for this trip are never the
+  // same objects as the ones left behind. Comparing the objects left the marks
+  // in place and sent them again on the next press.
+  const gone = new Set(next.taken.map(markKey));
+  setPending(pending().filter(item => !gone.has(markKey(item))));
+  paintSync();
+  openBotStart(next.payload);
+}
+
+function markKey(item) { return (item.drop ? "uv:" : "sv:") + item.token; }
+
+function paintSync() {
+  const button = document.getElementById("sync");
+  if (!button) return;
+  const waiting = pending().length;
+  button.hidden = !bot || waiting === 0;
+  const trip = nextPayload();
+  const carried = trip ? trip.taken.length : 0;
+  button.textContent = carried && carried < waiting
+    ? `↑ Отправить боту: ${carried} из ${waiting}`
+    : `↑ Отправить боту: ${waiting}`;
 }
 // --- the apps: logged in, and they keep playing in the background ----------
 //
@@ -224,6 +318,8 @@ function starButton(track) {
   return button;
 }
 
+document.getElementById("sync").onclick = () => sendPending();
+
 // --- carrying on where the last player stopped ------------------------------
 //
 // Telegram Desktop hides a Mini App when another chat is opened, keeps its
@@ -252,9 +348,34 @@ function loadState() {
 }
 
 function pauseAll() {
+  ytWanted = false;
   try { if (ytPlayer) ytPlayer.pauseVideo(); } catch (_) {}
   try { if (scWidget) scWidget.pause(); } catch (_) {}
 }
+
+// Locking the phone, or leaving this page for the chat, pauses the YouTube
+// frame. That is the phone, not this page: a system suspends video in the
+// background while it lets audio carry on, which is why SoundCloud and
+// Bandcamp keep playing through the same lock. Nothing here can lift it — the
+// frame belongs to another origin and this page cannot reach the video
+// element inside it, let alone ask for picture-in-picture, the one documented
+// exception.
+//
+// So the aim is narrower: coming back should cost nothing. `ytWanted` is what
+// the listener wanted, kept apart from what the player is doing, and on return
+// the two are made to agree again.
+let ytWanted = false;
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !started || !ytWanted) return;
+  if (current < 0 || !tracks[current] || tracks[current].p !== "y" || !ytPlayer) return;
+  try {
+    if (ytPlayer.getPlayerState() === YT.PlayerState.PLAYING) return;
+    // The frame keeps its position while paused, so this carries on from where
+    // the screen went off rather than from the top of the track.
+    ytPlayer.playVideo();
+  } catch (_) { /* the ▶ in the frame is still there */ }
+});
 
 // Another copy of this page opened (say, "▶ Слушать" pressed again after the
 // window was hidden): note where this one is, and stop.
@@ -301,6 +422,9 @@ function fromBase64url(text) {
 async function decode(fragment) {
   const params = new URLSearchParams(fragment.replace(/^#/, ""));
   bot = params.get("b") || "";
+  // The bot's name for this queue, so ☆ can send places in it instead of
+  // tokens. Absent on links made before queues were kept.
+  queueId = params.get("q") || "";
   const packed = params.get("t");
   if (!packed) return [];
   const stream = new Blob([fromBase64url(packed)]).stream()
@@ -310,9 +434,14 @@ async function decode(fragment) {
   // token existed put the Bandcamp URL fifth; tell them apart by its shape.
   // A seventh field, when the bot has it, opens the release in the Bandcamp app;
   // an eighth is a release's track list, [[track id, title, artist?], …].
-  return rows.flatMap(([p, id, artist, title, fifth, sixth, seventh, eighth]) => {
+  // `place` is the row's position in the queue the bot kept, counted from one
+  // — what ☆ sends in place of the token. A release expanded into its tracks
+  // keeps the release's place and adds the track's: "7.2".
+  return rows.flatMap(([p, id, artist, title, fifth, sixth, seventh, eighth], index) => {
+    const place = String(index + 1);
     if (fifth && fifth.startsWith("http")) return [{ p, id, artist, title, token: "", bc: fifth }];
-    const row = { p, id, artist, title, token: fifth || "", bc: sixth, app: seventh || "" };
+    const row = { p, id, artist, title, token: fifth || "", bc: sixth, app: seventh || "",
+                  place };
     return eighth && eighth.length > 1 ? releaseTracks(row, eighth) : [row];
   });
 }
@@ -327,6 +456,7 @@ function releaseTracks(release, listed) {
   return listed.map(([trackId, title, artist], index) => ({
     p: "b", id: `${release.id}:${trackId}`, artist: artist || release.artist, title,
     token: release.token ? `${release.token}-${index + 1}` : "",
+    place: release.place ? `${release.place}.${index + 1}` : "",
     bc: release.bc, app: release.app,
     release: release.title, part: `${index + 1} из ${listed.length}`,
   }));
@@ -348,6 +478,7 @@ function url(track) {
 }
 
 function render() {
+  paintSync();
   const list = document.getElementById("list");
   list.textContent = "";
   tracks.forEach((track, index) => {
@@ -421,7 +552,14 @@ function youtube() {
           playerVars: { playsinline: 1, rel: 0 },
           events: {
             onReady: () => resolve(ytPlayer),
-            onStateChange: e => { if (e.data === YT.PlayerState.ENDED) next(); },
+            onStateChange: e => {
+              if (e.data === YT.PlayerState.ENDED) { ytWanted = false; next(); return; }
+              if (e.data === YT.PlayerState.PLAYING) { ytWanted = true; return; }
+              // A pause while the page is on screen is the listener's own —
+              // theirs to undo. A pause while it is hidden is the system
+              // suspending the frame, and that one is resumed on return.
+              if (e.data === YT.PlayerState.PAUSED && !document.hidden) ytWanted = false;
+            },
             // 101/150: the uploader does not allow embedding. Skip it.
             onError: () => setTimeout(next, 1500),
           },
