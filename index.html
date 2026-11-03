@@ -44,6 +44,18 @@
            border-radius: 10px; overflow: hidden; }
   #stage.sc { aspect-ratio: auto; height: 166px; }
   #stage.bc { aspect-ratio: auto; height: 472px; background: transparent; }
+  /* A release played a track at a time gets Bandcamp's embed with the cover,
+     and that embed is a square cover at the full width of the frame with a
+     strip of title, seek bar and times underneath it (`.art { width: 100%;
+     padding-top: 100% }` in their own stylesheet). So the height it needs
+     follows the width, and a fixed 472px cut the seek bar off the bottom as
+     soon as the frame grew past ~370px — which is every laptop, while a phone
+     stayed just inside it. The box is measured in fitBandcampCover() instead
+     and kept to the 400px Bandcamp draws this layout for: their embed page
+     asks for a 500px-tall box (<meta name="viewport"
+     content="width=device-width,height=500">), and 400 + the strip is what
+     that number is. Centred, because on a wide panel it no longer stretches. */
+  #stage.bc.cover { margin-left: auto; margin-right: auto; }
   #stage > div, #stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
   #start { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
            background: rgba(0,0,0,.55); color: #fff; font-size: 18px; border: 0; cursor: pointer; z-index: 2; }
@@ -124,14 +136,62 @@ const SAVED_KEY = "dig-player:saved";
 const PENDING_KEY = "dig-player:pending";
 const PAYLOAD_MAX = 64;
 let queueId = "";
-function savedTokens() {
-  try { return new Set(JSON.parse(localStorage.getItem(SAVED_KEY) || "[]")); }
-  catch (_) { return new Set(); }
+// Which places in this queue the bot already had saved when it made this
+// link, and when that was (#s, #at). The ★ a row shows is decided from here
+// and not from this browser's own memory: a star travels to the chat as a
+// link, a link can fail to arrive, and a page told only by itself would go on
+// claiming such a track was saved for ever.
+let botSaved = new Set();
+let linkAt = 0;
+
+/** When each track was starred here, by token: {token: seconds}, negative for
+ * a star taken back. Tolerates the plain list an earlier version of this page
+ * kept by calling those stars old — older than any link, so the bot's own
+ * list decides them. */
+function savedHere() {
+  try {
+    const kept = JSON.parse(localStorage.getItem(SAVED_KEY) || "{}");
+    if (Array.isArray(kept)) return Object.fromEntries(kept.map(t => [t, 0]));
+    return kept && typeof kept === "object" ? kept : {};
+  } catch (_) { return {}; }
 }
 
+function setSavedHere(marks) {
+  try {
+    const newest = Object.entries(marks)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 500);
+    localStorage.setItem(SAVED_KEY, JSON.stringify(Object.fromEntries(newest)));
+  } catch (_) { /* the stars still show for this session */ }
+}
+
+/** Which of three states this row's star is in.
+ *
+ * "bot" — the bot has this track; "waiting" — it is marked here and has not
+ * been handed over yet; "" — it is not saved. The three are told apart on
+ * purpose: a mark shown as a finished ★ is how a listener comes to believe a
+ * track is in /saved when nothing was ever sent.
+ *
+ * A mark waiting answers for itself. Otherwise the bot's own list decides —
+ * except for a star pressed after this link was made, which that list cannot
+ * know about yet. So a star that reached the bot stays ★, and one whose trip
+ * was lost shows ☆ again the next time the bot sends a player, instead of
+ * lying about it for ever. */
+function starState(track) {
+  const waiting = pending().find(item => item.token === track.token);
+  if (waiting) return waiting.drop ? "" : "waiting";
+  const at = savedHere()[track.token] || 0;
+  if (Math.abs(at) > linkAt) return at > 0 ? "bot" : "";
+  return botSaved.has(track.place) ? "bot" : "";
+}
+
+/** Is this track saved, or about to be? What a press of ☆ turns around. */
+function starred(track) { return starState(track) !== ""; }
+
 /** What has been starred (or unstarred) here and not yet told to the bot:
- * [{place, token, drop}], oldest first. Kept per list, so closing the player
- * mid-session does not lose the marks. */
+ * [{qid, place, token, drop}], oldest first. One store for every list, so
+ * closing the player mid-session does not lose the marks — and that is why
+ * each mark remembers the queue it was made in: a place means nothing outside
+ * it. */
 function pending() {
   try {
     const kept = JSON.parse(localStorage.getItem(PENDING_KEY) || "[]");
@@ -157,23 +217,43 @@ const PHONE = !!tg && ["ios", "android"].includes(tg.platform);
 // instead of hiding it in a URL the client may shortcut, so it is tried first
 // off the phone, with the https form left as the fallback.
 function openBotStart(payload) {
-  if (!bot) return;
+  if (!bot) {
+    showError("Плеер не знает, как написать боту — сделай запрос заново.");
+    return false;
+  }
   const web = `https://t.me/${bot}?start=${encodeURIComponent(payload)}`;
-  if (!tg || !tg.openTelegramLink) { window.open(web, "_blank"); return; }
+  if (!tg || !tg.openTelegramLink) { window.open(web, "_blank"); return true; }
   if (!PHONE) {
     try {
       tg.openTelegramLink(
         `tg://resolve?domain=${encodeURIComponent(bot)}&start=${encodeURIComponent(payload)}`);
-      return;
+      return true;
     } catch (_) { /* fall through to the https form */ }
   }
-  tg.openTelegramLink(web);
+  try {
+    tg.openTelegramLink(web);
+    return true;
+  } catch (_) {
+    showError("Telegram не дал открыть чат с ботом. Отметки остались здесь — "
+              + "попробуй ещё раз.");
+    return false;
+  }
 }
 
 function star(track) {
-  if (!bot || !track.token) return;
-  const saved = savedTokens();
-  const undo = saved.has(track.token);
+  if (!track.token) {
+    // This row reached the player without a name of its own — an old link,
+    // from before ☆ existed. Say so: a star that quietly does nothing is
+    // worse than one that cannot be pressed at all.
+    showError("Этот трек не сохранить: он пришёл в плеер без имени. "
+              + "Сделай запрос заново — ☆ снова будет работать.");
+    return;
+  }
+  if (!bot) {
+    showError("Плеер не знает, как написать боту — сделай запрос заново.");
+    return;
+  }
+  const was = starred(track);
   // A star pressed and unpressed before the hand-over is not two instructions
   // for the bot: it is none. A track therefore has at most one mark waiting,
   // and pressing again cancels it rather than queueing its opposite.
@@ -181,31 +261,43 @@ function star(track) {
   const already = waiting.some(item => item.token === track.token);
   const rest = waiting.filter(item => item.token !== track.token);
   setPending(already ? rest
-    : rest.concat([{ place: track.place || "", token: track.token, drop: undo }]));
-  try {
-    if (undo) saved.delete(track.token); else saved.add(track.token);
-    localStorage.setItem(SAVED_KEY, JSON.stringify([...saved].slice(-500)));
-  } catch (_) {}
+    : rest.concat([{ qid: queueId, place: track.place || "",
+                     token: track.token, drop: was }]));
+  const marks = savedHere();
+  marks[track.token] = (was ? -1 : 1) * Math.floor(Date.now() / 1000);
+  setSavedHere(marks);
   render();
 }
 
-/** The payload for the next trip, and what it carries: as many waiting marks
- * of one kind as fit in 64 characters, in the order they were made. */
+/** Is this mark a place in the list on screen?
+ *
+ * A place is only a place in the queue it was made in: "14" is the fourteenth
+ * row of *that* list, and sent against another one it saves a track nobody
+ * pressed while the one that was pressed is never saved at all. */
+function here(item) { return !!(queueId && item.place && item.qid === queueId); }
+
+/** The payload for the next trip, and what it carries.
+ *
+ * Places travel while their own list is the one open — as many of them as fit
+ * in 64 characters, in the order they were made. A mark left over from some
+ * other list travels as its own token instead, which names the track outright
+ * wherever it is sent; a token is twelve characters and the bot reads a
+ * payload as either one queue's places or one token, so those go one per
+ * trip. */
 function nextPayload() {
   const waiting = pending();
   if (!waiting.length) return null;
   const drop = waiting[0].drop;                 // adds and removals travel apart
   const head = drop ? "uv_" : "sv_";
+  if (!here(waiting[0])) {
+    const alone = waiting[0];
+    return alone.token ? { payload: head + alone.token, taken: [alone] } : null;
+  }
   const taken = [];
   let payload = "";
   for (const item of waiting) {
-    if (item.drop !== drop) break;
-    // With a queue id the mark is a place in it; without one — an old link —
-    // the token itself, which leaves room for a single mark per trip.
-    const piece = queueId && item.place ? item.place : item.token;
-    const grown = payload
-      ? `${payload}-${piece}`
-      : head + (queueId && item.place ? `${queueId}-${piece}` : piece);
+    if (item.drop !== drop || !here(item)) break;
+    const grown = payload ? `${payload}-${item.place}` : `${head}${queueId}-${item.place}`;
     if (grown.length > PAYLOAD_MAX) break;
     payload = grown;
     taken.push(item);
@@ -216,7 +308,22 @@ function nextPayload() {
 /** Hand the waiting marks over. This is the one place the player closes. */
 function sendPending() {
   const next = nextPayload();
-  if (!next) return;
+  if (!next) {
+    const waiting = pending();
+    if (!waiting.length) return;
+    // A mark nothing can be made of. Drop it and say so, rather than leave
+    // the button counting marks that no press will ever send.
+    setPending(waiting.slice(1));
+    paintSync();
+    showError("Одну отметку отправить не удалось: у трека нет имени от бота. "
+              + "Сделай запрос заново и нажми ☆ ещё раз.");
+    return;
+  }
+  // The link first, the bookkeeping after. Clearing the marks before the trip
+  // lost them outright whenever the trip did not happen; this way the worst
+  // that a half-made trip costs is the same star sent twice, which the bot
+  // takes as the one save it already is.
+  if (!openBotStart(next.payload)) return;
   // By what the mark says, not by which object holds it: every pending() call
   // parses the store afresh, so the items taken for this trip are never the
   // same objects as the ones left behind. Comparing the objects left the marks
@@ -224,7 +331,6 @@ function sendPending() {
   const gone = new Set(next.taken.map(markKey));
   setPending(pending().filter(item => !gone.has(markKey(item))));
   paintSync();
-  openBotStart(next.payload);
 }
 
 function markKey(item) { return (item.drop ? "uv:" : "sv:") + item.token; }
@@ -236,9 +342,11 @@ function paintSync() {
   button.hidden = !bot || waiting === 0;
   const trip = nextPayload();
   const carried = trip ? trip.taken.length : 0;
+  // What the ✩ rows are waiting for, said on the button rather than in a
+  // tooltip no phone ever shows: until this is pressed, nothing is saved.
   button.textContent = carried && carried < waiting
-    ? `↑ Отправить боту: ${carried} из ${waiting}`
-    : `↑ Отправить боту: ${waiting}`;
+    ? `↑ Сохранить у бота: ${carried} из ${waiting} ✩`
+    : `↑ Сохранить у бота: ${waiting} ✩ (иначе не сохранятся)`;
 }
 // --- the apps: logged in, and they keep playing in the background ----------
 //
@@ -311,9 +419,11 @@ function digButton(track) {
 function starButton(track) {
   const button = document.createElement("button");
   button.className = "star";
-  const done = savedTokens().has(track.token);
-  button.textContent = done ? "★" : "☆";
-  button.title = done ? "Убрать из сохранённого" : "Сохранить в боте";
+  const state = starState(track);
+  button.textContent = state === "bot" ? "★" : state === "waiting" ? "✩" : "☆";
+  button.title = state === "bot" ? "Сохранено у бота — нажми, чтобы убрать"
+    : state === "waiting" ? "Отмечено. Сохранится, когда нажмёшь «↑ Отправить боту»"
+    : "Сохранить в боте";
   button.onclick = event => { event.stopPropagation(); star(track); };
   return button;
 }
@@ -425,6 +535,10 @@ async function decode(fragment) {
   // The bot's name for this queue, so ☆ can send places in it instead of
   // tokens. Absent on links made before queues were kept.
   queueId = params.get("q") || "";
+  // What the bot already had saved when it made this link, by place, and when
+  // that was — see starred().
+  botSaved = new Set((params.get("s") || "").split(",").filter(Boolean));
+  linkAt = Number(params.get("at") || 0) || 0;
   const packed = params.get("t");
   if (!packed) return [];
   const stream = new Blob([fromBase64url(packed)]).stream()
@@ -577,8 +691,36 @@ function clearSoundcloud() {
     if (old) old.remove();
   }
   scWidget = null;
-  document.getElementById("stage").classList.remove("sc", "bc");
+  const stage = document.getElementById("stage");
+  stage.classList.remove("sc", "bc", "cover");
+  // What fitBandcampCover() measured out is only true of that one embed.
+  stage.style.maxWidth = "";
+  stage.style.height = "";
 }
+
+// The strip under the cover: title, the seek bar, the times, and the buy and
+// share links. Bandcamp gives it no fixed height — it grows if a title wraps
+// — so this is their 500px box minus the 400px cover, plus a little, because
+// the cost of a few empty transparent pixels is nothing and the cost of being
+// short is the seek bar she cannot reach.
+const BC_STRIP = 110;
+const BC_WIDEST = 400;
+
+/** Size the stage for Bandcamp's embed-with-cover — see #stage.bc.cover. */
+function fitBandcampCover(stage) {
+  stage.classList.add("cover");
+  stage.style.maxWidth = "";                      // the full room, to measure
+  const side = Math.min(stage.clientWidth || BC_WIDEST, BC_WIDEST);
+  stage.style.maxWidth = side + "px";
+  stage.style.height = (side + BC_STRIP) + "px";
+}
+
+// A laptop panel can be dragged narrower or wider while a track plays, and
+// the cover is square: what fits at one width clips at another.
+window.addEventListener("resize", () => {
+  const stage = document.getElementById("stage");
+  if (stage && stage.classList.contains("cover")) fitBandcampCover(stage);
+});
 
 function hex(cssVar, fallback) {
   const value = getComputedStyle(document.documentElement).getPropertyValue(cssVar).trim();
@@ -649,6 +791,9 @@ async function play(index) {
       // what does not fit cannot be reached. A single has no list: big art.
       "/size=large/bgcol=" + hex("--bg", "ffffff") + "/linkcol=" + hex("--accent", "0687f5") +
       (single ? "/tracklist=false" : "/artwork=small/tracklist=true") + "/transparent=true/";
+    // Only the embed with the cover is sized to its width; the track-list one
+    // hides its artwork altogether, so its 472px are all list and strip.
+    if (single) fitBandcampCover(stage);
     stage.append(frame);
   } else {
     // Bandcamp with no release id: open it in the browser.
