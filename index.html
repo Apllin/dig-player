@@ -85,6 +85,17 @@
           background: none; border: 1px solid var(--accent); color: var(--accent);
           border-radius: 8px; font-size: 15px; cursor: pointer; }
   #error { color: #f87171; margin: 1em 0; }
+  /* A ☆ cannot save on the spot — the page has no server and the only way to
+     the bot closes the player (see the note by SAVED_KEY). So the press
+     answers for itself here, at the top where the thumb is already looking,
+     and fades on its own rather than adding one more thing to dismiss. */
+  #toast { position: fixed; left: 8px; right: 8px; top: 8px; z-index: 5;
+           padding: 10px 12px; border-radius: 8px; font-size: 14px;
+           background: var(--accent); color: var(--accent-fg);
+           box-shadow: 0 2px 10px rgba(0,0,0,.35);
+           opacity: 0; transition: opacity .18s; pointer-events: none; }
+  #toast.on { opacity: 1; }
+  #toast.miss { background: #f87171; color: #1b1b1b; }
 </style>
 </head>
 <body>
@@ -96,6 +107,7 @@
   <button id="next" aria-label="Следующий">⏭</button>
 </div>
 <button id="sync" hidden></button>
+<div id="toast" hidden></div>
 <div id="error" hidden></div>
 <ol id="list"></ol>
 
@@ -218,6 +230,7 @@ const PHONE = !!tg && ["ios", "android"].includes(tg.platform);
 // off the phone, with the https form left as the fallback.
 function openBotStart(payload) {
   if (!bot) {
+    toast("Не сохранить: плеер не знает, как написать боту", true);
     showError("Плеер не знает, как написать боту — сделай запрос заново.");
     return false;
   }
@@ -245,6 +258,7 @@ function star(track) {
     // This row reached the player without a name of its own — an old link,
     // from before ☆ existed. Say so: a star that quietly does nothing is
     // worse than one that cannot be pressed at all.
+    toast("Не сохранить: трек пришёл в плеер без имени", true);
     showError("Этот трек не сохранить: он пришёл в плеер без имени. "
               + "Сделай запрос заново — ☆ снова будет работать.");
     return;
@@ -266,6 +280,12 @@ function star(track) {
   const marks = savedHere();
   marks[track.token] = (was ? -1 : 1) * Math.floor(Date.now() / 1000);
   setSavedHere(marks);
+  // What the press did, said at once. Until the hand-over, "saved" would be a
+  // lie, so the words are about the mark and name the button that ends it.
+  const named = `${track.artist} — ${track.title}`;
+  if (already) toast(`Отметка снята: ${named}`);
+  else if (was) toast(`Уберём у бота: ${named} — нажми «↑ Сохранить у бота»`);
+  else toast(`✩ Отмечено: ${named} — нажми «↑ Сохранить у бота»`);
   render();
 }
 
@@ -315,6 +335,7 @@ function sendPending() {
     // the button counting marks that no press will ever send.
     setPending(waiting.slice(1));
     paintSync();
+    toast("Одну отметку отправить не удалось", true);
     showError("Одну отметку отправить не удалось: у трека нет имени от бота. "
               + "Сделай запрос заново и нажми ☆ ещё раз.");
     return;
@@ -516,6 +537,32 @@ setInterval(() => {
 function clock(seconds) {
   const s = Math.floor(seconds);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+let toastTimer = null;
+
+/** Say something at the top of the player and take it back after a moment.
+ *
+ * `miss` colours it as a failure. Nothing here closes the player or waits to
+ * be dismissed: a star is pressed while music plays, and an answer that
+ * interrupts either one costs more than it tells. */
+function toast(text, miss) {
+  const box = document.getElementById("toast");
+  if (!box) return;
+  box.textContent = text;
+  box.className = miss ? "miss" : "";
+  box.hidden = false;
+  // A frame between unhiding and the class, or the transition never runs and
+  // a second star in a row would not flash at all.
+  requestAnimationFrame(() => box.classList.add("on"));
+  if (tg && tg.HapticFeedback) {
+    try { tg.HapticFeedback.impactOccurred(miss ? "heavy" : "light"); } catch (e) { /* older app */ }
+  }
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    box.classList.remove("on");
+    setTimeout(() => { box.hidden = true; }, 200);
+  }, miss ? 4000 : 2600);
 }
 
 function showError(text) {
