@@ -458,9 +458,23 @@ document.getElementById("sync").onclick = () => sendPending();
 // starts a fresh page — so the old one is told to fall silent, and the new one
 // picks up the same track at the same second. Position is kept per list, in
 // this browser's local storage, for a few hours.
-const STATE_KEY = "dig-player:" + [...location.hash].reduce(
-  (h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 7).toString(36);
+// Keyed by what names the list and nothing else: the bot's queue id ("q"),
+// or the packed rows when a link carries no id. NOT the whole fragment —
+// that also holds "at", the moment the link was made, and "s", which of
+// these the bot has saved. Both change while the list stays the same: the
+// bot rebuilds a message's player link once it has read the Bandcamp pages,
+// and again after a star is pressed. Keyed by the fragment, every such
+// rebuild started a new key and the place in a long collection was silently
+// lost — reopening began from the top with no sign of why.
+const STATE_KEY = (() => {
+  const params = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const names = params.get("q") || params.get("t") || location.hash;
+  return "dig-player:" + [...names].reduce(
+    (h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 7).toString(36);
+})();
 const STATE_TTL_MS = 6 * 3600 * 1000;
+let listFirst = 0;           // this queue's first row, numbered in the whole list
+let listTotal = 0;           // how many rows that whole list holds
 let position = 0;            // seconds into the current track
 let resumeAt = 0;            // where to start the first track played, once
 
@@ -586,6 +600,13 @@ async function decode(fragment) {
   // that was — see starred().
   botSaved = new Set((params.get("s") || "").split(",").filter(Boolean));
   linkAt = Number(params.get("at") || 0) || 0;
+  // Where these rows sit in the list the message is paging through: the
+  // number of the first of them, and how many there are in all. A bought
+  // record becomes several tracks here, so this page's own "87 из 126" says
+  // nothing about how far through a collection of 320 the listener has come.
+  // Absent on links made before the bot sent them.
+  listFirst = Number(params.get("r") || 0) || 0;
+  listTotal = Number(params.get("n") || 0) || 0;
   const packed = params.get("t");
   if (!packed) return [];
   const stream = new Blob([fromBase64url(packed)]).stream()
@@ -665,7 +686,15 @@ function render() {
     const a = document.createElement("div"); a.className = "artist"; a.textContent = track.artist;
     const t = document.createElement("div"); t.textContent = track.title;
     const w = document.createElement("div"); w.className = "where";
-    w.textContent = `${current + 1} из ${tracks.length} · ${LABEL[track.p]}`;
+    // Numbered as the list numbers it, where the bot said where that is: a
+    // row of the list, not a track of this player, because a record splits
+    // into tracks here and the two counts then disagree. The place string
+    // the bot's ☆ uses already holds the row ("7", or "7.2" for a track of
+    // the seventh record), so the row is its integer part.
+    const row = Number(String(track.place || "").split(".")[0]) || 0;
+    w.textContent = (listFirst && listTotal && row)
+      ? `№${listFirst + row - 1} из ${listTotal} в списке · ${LABEL[track.p]}`
+      : `${current + 1} из ${tracks.length} · ${LABEL[track.p]}`;
     now.append(a, t, w);
     if (bot && track.token) {
       const saveNow = starButton(track);
