@@ -437,6 +437,30 @@ function digButton(track) {
   return button;
 }
 
+/** The row this track sits on, numbered in the whole list the bot is paging
+ * through — 0 when the link does not say. A record splits into tracks here,
+ * so the row is the integer part of the place the bot gave it. */
+function listPlace(track) {
+  const row = Number(String(track.place || "").split(".")[0]) || 0;
+  return listFirst && row ? listFirst + row - 1 : 0;
+}
+
+// 📍: the listening mark. The bot keeps the place in the library, not this
+// page — local storage here forgets after a few hours and knows nothing of
+// another phone — so this hands it the place of the track playing and the
+// chat opens the list there. "lb_<place>".
+function markButton(track) {
+  const button = document.createElement("button");
+  button.className = "star";
+  button.textContent = "📍";
+  button.title = "Запомнить, что я остановилась здесь";
+  button.onclick = event => {
+    event.stopPropagation();
+    openBotStart(`lb_${listPlace(track)}`);
+  };
+  return button;
+}
+
 function starButton(track) {
   const button = document.createElement("button");
   button.className = "star";
@@ -473,6 +497,7 @@ const STATE_KEY = (() => {
     (h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 7).toString(36);
 })();
 const STATE_TTL_MS = 6 * 3600 * 1000;
+let markHere = false;        // whether this list is one the bot keeps a mark in
 let listFirst = 0;           // this queue's first row, numbered in the whole list
 let listTotal = 0;           // how many rows that whole list holds
 let position = 0;            // seconds into the current track
@@ -607,6 +632,9 @@ async function decode(fragment) {
   // Absent on links made before the bot sent them.
   listFirst = Number(params.get("r") || 0) || 0;
   listTotal = Number(params.get("n") || 0) || 0;
+  // The library: a list the bot keeps a listening mark in, so 📍 has
+  // somewhere to put it. Any other list leaves the button out.
+  markHere = params.get("m") === "1";
   const packed = params.get("t");
   if (!packed) return [];
   const stream = new Blob([fromBase64url(packed)]).stream()
@@ -691,15 +719,16 @@ function render() {
     // into tracks here and the two counts then disagree. The place string
     // the bot's ☆ uses already holds the row ("7", or "7.2" for a track of
     // the seventh record), so the row is its integer part.
-    const row = Number(String(track.place || "").split(".")[0]) || 0;
-    w.textContent = (listFirst && listTotal && row)
-      ? `№${listFirst + row - 1} из ${listTotal} в списке · ${LABEL[track.p]}`
+    const at = listPlace(track);
+    w.textContent = (at && listTotal)
+      ? `№${at} из ${listTotal} в списке · ${LABEL[track.p]}`
       : `${current + 1} из ${tracks.length} · ${LABEL[track.p]}`;
     now.append(a, t, w);
     if (bot && track.token) {
       const saveNow = starButton(track);
       saveNow.id = "star";
       a.append(" ", saveNow, " ", digButton(track));
+      if (markHere && listPlace(track)) a.append(" ", markButton(track));
     }
     if (track.part) {
       w.textContent += ` · трек ${track.part} релиза «${track.release}»; к следующему — ⏭`;
